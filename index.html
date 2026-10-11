@@ -918,10 +918,12 @@ function fld(label,val,cb,ph){
   var l=el("label",null,label),i=document.createElement("input");i.value=val==null?"":val;if(ph)i.placeholder=ph;
   i.oninput=function(){cb(i.value)};l.appendChild(i);l.input=i;return l;
 }
+var kedit=null,kdirty=false;
 function buildKList(){
-  $("c-asof").value=kdata.asOf||"";
+  if(!kedit||!kdirty)kedit=clone(kdata);
+  $("c-asof").value=kedit.asOf||"";
   var box=$("klist");box.textContent="";
-  kdata.items.forEach(function(k,idx){
+  kedit.items.forEach(function(k,idx){
     var c=el("div","card");
     c.appendChild(fld("اسم المؤشر",k.name,function(v){k.name=v}));
     var g=el("div","g2");
@@ -938,25 +940,31 @@ function buildKList(){
       var p=k.lower?(a?t/a*100:null):a/t*100;if(p==null)return;k.pct=Math.round(p*10)/10;pl.input.value=k.pct};
     r.appendChild(calc);
     var up=el("button","btn ghost sm","↑");up.type="button";up.setAttribute("aria-label","للأعلى");
-    up.onclick=function(){if(idx>0){kdata.items.splice(idx-1,0,kdata.items.splice(idx,1)[0]);buildKList()}};
+    up.onclick=function(){if(idx>0){kedit.items.splice(idx-1,0,kedit.items.splice(idx,1)[0]);buildKList()}};
     var dn=el("button","btn ghost sm","↓");dn.type="button";dn.setAttribute("aria-label","للأسفل");
-    dn.onclick=function(){if(idx<kdata.items.length-1){kdata.items.splice(idx+1,0,kdata.items.splice(idx,1)[0]);buildKList()}};
+    dn.onclick=function(){if(idx<kedit.items.length-1){kedit.items.splice(idx+1,0,kedit.items.splice(idx,1)[0]);buildKList()}};
     var del=el("button","btn danger sm","حذف");del.type="button";
-    del.onclick=function(){if(del.dataset.s){kdata.items.splice(idx,1);buildKList()}else{del.dataset.s="1";del.textContent="تأكيد الحذف";setTimeout(function(){del.dataset.s="";del.textContent="حذف"},3500)}};
+    del.onclick=function(){if(del.dataset.s){kedit.items.splice(idx,1);buildKList()}else{del.dataset.s="1";del.textContent="تأكيد الحذف";setTimeout(function(){del.dataset.s="";del.textContent="حذف"},3500)}};
     r.appendChild(up);r.appendChild(dn);r.appendChild(del);c.appendChild(r);box.appendChild(c);
   });
 }
-$("c-asof").oninput=function(){kdata.asOf=$("c-asof").value};
-$("kadd").onclick=function(){kdata.items.push({name:"",date:"",target:"",actual:"",pct:null});buildKList();window.scrollTo(0,document.body.scrollHeight)};
+$("c-asof").oninput=function(){kedit.asOf=$("c-asof").value};
+$("kadd").onclick=function(){kdirty=true;kedit.items.push({name:"",date:"",target:"",actual:"",pct:null});buildKList();window.scrollTo(0,document.body.scrollHeight)};
 function kmsg(t,e){$("kmsg").textContent=t;$("kmsg").className="msg"+(e?" err":"")}
 $("ksave").onclick=async function(){
   if(!db){kmsg("التخزين غير متاح.",true);return}
   try{kmsg("جاري الحفظ…");
-    await db.doc("settings/kpis").set(clone({asOf:kdata.asOf||"",items:kdata.items}));
+    var payload=clone({asOf:kedit.asOf||"",items:kedit.items});
+    await db.doc("settings/kpis").set(payload);
+    var ref=db.doc("settings/kpis"),chk=typeof ref.get==="function"?await ref.get():null,cd=chk&&chk.data?chk.data():null;
+    if(chk&&(!cd||JSON.stringify(cd.items||[])!==JSON.stringify(payload.items)||(cd.asOf||"")!==payload.asOf))throw new Error("verify");
+    kdirty=false;kdata={asOf:payload.asOf,items:clone(payload.items)};renderKPI();
     kmsg("تم الحفظ وتحدثت المنصة.")}
-  catch(e){kmsg("تعذر الحفظ"+(e&&e.code?" ("+e.code+")":""),true)}
+  catch(e){kmsg(e&&e.message==="verify"?"لم يتأكد الحفظ، أعد المحاولة.":"تعذر الحفظ"+(e&&e.code?" ("+e.code+")":""),true)}
 };
 
+["input","change","click"].forEach(function(t){$("klist").addEventListener(t,function(e){if(t==="click"&&!(e.target.closest&&e.target.closest("button")))return;kdirty=true},true)});
+$("c-asof").addEventListener("input",function(){kdirty=true},true);
 /* الزيارات - إدارة */
 function fmsg(t,e){$("fmsg").textContent=t;$("fmsg").className="msg"+(e?" err":"")}
 function openForm(v){
@@ -1059,7 +1067,9 @@ function loadHail(){
 }
 
 /* ---------- التشغيل ---------- */
-renderKPI();renderVisits();route();
+renderKPI();renderVisits();
+if(/^#?(menu)?$/.test(location.hash||"")){try{history.replaceState(null,"",location.pathname+location.search)}catch(e){location.hash=""}}
+route();
 (async function(){
   try{var user=await claude.use("user");isAdmin=user?await user.canEdit():false}catch(e){isAdmin=false}
   adminChecked=true;
@@ -1068,7 +1078,7 @@ renderKPI();renderVisits();route();
   if(db){
     db.doc("settings/kpis").onSnapshot(function(s){
       if(s.exists){var d=s.data();kdata={asOf:d.asOf||"",items:d.items||[]};renderKPI();
-        if(!$("ctl").hidden&&isAdmin&&!document.activeElement.closest("#klist"))buildKList()}
+        if(!kdirty){kedit=clone(kdata);if(!$("ctl").hidden&&isAdmin&&!document.activeElement.closest("#klist"))buildKList()}}
     },function(){});
     db.doc("settings/theme").onSnapshot(function(s){
       if(s.exists){var d=s.data();
